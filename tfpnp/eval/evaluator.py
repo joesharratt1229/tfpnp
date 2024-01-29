@@ -2,6 +2,10 @@ import os
 import time
 import torch
 from os.path import join
+from pathlib import Path
+import json
+import numpy as np
+from PIL import Image
 
 from ..utils.visualize import save_img, seq_plot
 from ..utils.metric import psnr_qrnn3d
@@ -11,86 +15,96 @@ from ..env.base import PnPEnv
 
 
 class Evaluator(object):
-    def __init__(self, env: PnPEnv, val_loaders, savedir=None, metric=psnr_qrnn3d):
+    def __init__(self, env: PnPEnv, loader, metric=psnr_qrnn3d):
         self.env = env
-        self.val_loaders = val_loaders
-        self.savedir = savedir
+        self.val_loader = loader
         self.metric = metric
-        self.logger = Logger(savedir)
+
+        self.output_dir = 'OffPolicy/CSMRI'
+        self.image_dir = 'OffPolicy/Image_Dir/CSMRI'
 
     @torch.no_grad()
     def eval(self, policy, step):
         policy.eval()
         total_metric = 0
-        for name, val_loader in self.val_loaders.items():
-            metric_tracker = MetricTracker()
-            for index, data in enumerate(val_loader):
-                assert data['gt'].shape[0] == 1
 
-                # obtain sample's name
-                if name in data.keys():
-                    data_name = data['name'][0]
-                    data.pop('name')
-                else:
-                    data_name = 'case' + str(index)
+        metric_tracker = MetricTracker()
+        for index, data in enumerate(self.val_loader):
+            assert data['gt'].shape[0] == 1
 
-                # run
-                psnr_init, psnr_finished, info, imgs = eval_single(self.env, data, policy,
-                                                                   max_episode_step=self.env.max_episode_step,
-                                                                   metric=self.metric)
+           
+            # run
+            psnr_init, psnr_finished, info, imgs, rewards, states = eval_single(self.env, data, policy,
+                                                                max_episode_step=self.env.max_episode_step,
+                                                                metric=self.metric)
 
-                episode_steps, psnr_seq, action_seqs, run_time = info
-                input, output_init, output, gt = imgs
+            episode_steps, psnr_seq, action_seqs, run_time = info
 
-                # save metric
-                metric_tracker.update({'iters': episode_steps,
-                                       'psnr_init': psnr_init, 'psnr': psnr_finished, 'time': run_time})
-
-                # save imgs
-                if self.savedir is not None:
-                    base_dir = join(self.savedir, name, data_name, str(step))
-                    os.makedirs(base_dir, exist_ok=True)
-
-                    save_img(input, join(base_dir, 'input.png'))
-                    save_img(output_init, join(base_dir, 'output_init.png'))
-                    save_img(output, join(base_dir, f'output_{psnr_finished: .2f}.png'))
-                    save_img(gt, join(base_dir, 'gt.png'))
-
-                    params = {}
-                    for k, v in action_seqs.items():
-                        seq_plot(v, 'step', k, save_path=join(base_dir, str(k)+'.png'))
-                        params[str(k)] = [float(x) for x in v]
+            state_dir = []
+            
+            for traj, state in enumerate(states):
+                x, z, u = np.split(state, 3)
+                for arr, label in zip([x, z, u], ['x', 'z', 'u']):
+                    arr = arr.astype(np.int32).reshape(128, 128)
+                    image_path = f'{self.image_dir}/csrmi_{label}_image_{index}_trajectory_{traj}.png'
                     
-                    import json
-                    json.dump(params, open(join(base_dir, 'action_seqs.json'), 'w'))
+                    Image.fromarray(arr).save(image_path)
+                    state_dir.append(image_path)
 
-                    seq_plot(psnr_seq, 'step', 'psnr',
-                             save_path=join(base_dir, 'psnr.png'))
 
-            total_metric += metric_tracker['psnr']
-            self.logger.log('Step_{:07d}: {} | {}'.format(step - 1, name, metric_tracker), color=COLOR.RED)
-        return total_metric / len(self.val_loaders)
+            for key in action_seqs.keys():
+                action_seqs[key] = [float(value) for value in action_seqs[key]]
+
+            rewards = [float(rew) for rew in rewards]
+
+            result = [rewards[-1] - element for element in rewards][:-1]
+            json_file = {'RTG': result, 'Actions' : action_seqs, 'Task': 'csmri', 
+                            'Output Mask': {'mu': 1, 'Sigma_d': 1, 'T': 1, 'Tau': 0},
+                            'State Paths': state_dir}
+            
+            with open(f'{self.output_dir}/csmri_{index}.json', 'w+') as file_output:
+                json_string = json.dumps(json_file)
+                file_output.write(json_string)
+            
+            
+            
 
 
 def eval_single(env, data, policy, max_episode_step, metric):
+    rewards_array = []
+
+    states_array = []
+
+
     observation = env.reset(data=data)
     hidden = policy.init_state(observation.shape[0])  # TODO: add RNN support
     _, output_init, gt = env.get_images(observation)
 
+
     psnr_init = metric(output_init[0], gt[0])
+    output_initial = output_init[0].astype(np.int32)
+    temp_z = output_initial.copy()
+    temp_u = np.zeros_like(output_initial)
+    initial_ob = np.concatenate([output_initial, temp_z, temp_u])
+
+    states_array.append(initial_ob)
 
     episode_steps = 0
 
     psnr_seq = [psnr_init]
     action_seqs = {}
+    rewards_array.append(psnr_init)
 
     ob = observation
     time_stamp = time.time()
     while episode_steps < max_episode_step:
-        action, _, _, hidden = policy(env.get_policy_ob(ob), idx_stop=None, train=False, hidden=hidden)
+        action, time_probs, hidden = policy(env.get_policy_ob(ob), idx_stop=None, train=False, hidden=hidden)
 
         # since batch size = 1, ob and ob_masked are always identicial
-        ob, _, _, done, _ = env.step(action)
+        ob, _, rewards, done, _, states = env.step(action, gt)
+        rewards_array.extend(rewards)
+        states_array.extend(states)
+
 
         episode_steps += 1
 
@@ -99,6 +113,11 @@ def eval_single(env, data, policy, max_episode_step, metric):
         psnr_seq.append(cur_psnr.item())
 
         action.pop('idx_stop')
+        if 'T' not in action_seqs.keys():
+            action_seqs['T'] = []
+
+        action_seqs['T'].extend(time_probs)
+
         for k, v in action.items():
             if k not in action_seqs.keys():
                 action_seqs[k] = []
@@ -114,4 +133,4 @@ def eval_single(env, data, policy, max_episode_step, metric):
     info = (episode_steps, psnr_seq, action_seqs, run_time)
     imgs = (input[0], output_init[0], output[0], gt[0])
 
-    return psnr_init, psnr_finished, info, imgs
+    return psnr_init, psnr_finished, info, imgs, rewards_array, states_array

@@ -12,12 +12,25 @@ class CSMRIEnv(PnPEnv):
         super().__init__(data_loader, solver, max_episode_step)
     
     def get_policy_ob(self, ob):
+        """
+        Extracts thr input into policy network based on observation,
+        the input dimension into policy network is set to 6 and here we see
+        that the ob tensor has 6 dimensions
+
+        """
+        
         ob= torch.cat([
+            #concatenates x, z, u along with degraded observation -> this incorporates penalty and noise parameters since variables a non-linear function of this
             complex2real(ob.variables),
+            #masked fourier transform data with noise -> original k space data
             complex2channel(ob.y0),
+            #reconstricuted image
             complex2real(ob.ATy0),
+            #sampling mask
             ob.mask,
+            #time step
             ob.T,
+            #noise added to obtain initial degraded observation
             complex2real(ob.sigma_n),
         ], 1)
         return ob
@@ -51,6 +64,7 @@ class CSMRIEnv(PnPEnv):
         return Batch(gt=self.state['gt'][idx_left, ...],
                      y0=self.state['y0'][idx_left, ...],
                      ATy0=self.state['ATy0'][idx_left, ...],
+                     #x, z, u
                      variables=self.state['solver'][idx_left, ...],
                      mask=self.state['mask'][idx_left, ...].float(),
                      sigma_n=self.state['sigma_n'][idx_left, ...],

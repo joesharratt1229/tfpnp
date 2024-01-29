@@ -3,13 +3,16 @@ import random
 
 class ReplayMemory:
     def __init__(self, capacity):
+        #capacity of replay memory buffer
         self.capacity = capacity
         self.buffer = []
         self.index = 0
 
     def store(self, obj):
+        #more than 120 remove exaples from replay memory -> 12 out of 120 sampled
         if self.size() > self.capacity:
             print('buffer size larger than capacity, trimming...')
+            #Overwrites oldest observations in replay buffer
             self.buffer = self.buffer[(self.size() - self.capacity):]
         elif self.size() == self.capacity:
             self.buffer[self.index] = obj
@@ -22,10 +25,12 @@ class ReplayMemory:
         return len(self.buffer)
 
     def sample_batch(self, env_batch):
+        #IF SIZE IS LESS THAT SIZE OF BATCH SAMPLE UP TO MAXIUMUM SIZE
         if self.size() < env_batch:
             index_value = random.sample(
                 list(enumerate(self.buffer)), self.size())
         else:
+            #Otherwise sample to length of environment batch
             index_value = random.sample(
                 list(enumerate(self.buffer)), env_batch)
         indexes = []

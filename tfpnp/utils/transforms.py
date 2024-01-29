@@ -1,9 +1,6 @@
 import numpy as np
 import torch
 
-torch_fft = torch.fft
-torch_ifft = torch.ifft 
-
 # ---------------------------------------------------------------------------- #
 #                                   CSMRI                                      #
 # ---------------------------------------------------------------------------- #
@@ -64,8 +61,23 @@ def apply_mask(data, mask_func, seed=None):
     mask = mask_func(shape, seed)
     return torch.where(mask == 0, torch.Tensor([0]), data), mask
 
+def ifft(data):
+    return torch.view_as_real(
+        torch.fft.ifftn(
+            torch.view_as_complex(data), dim = (-2, -1), norm = 'ortho'
+        )
+    )
 
-def fft2(data):
+def fft(data):
+    return torch.view_as_real(
+        torch.fft.fftn(
+            torch.view_as_complex(data), dim = (-2, -1), norm = 'ortho'
+        )
+    )
+
+
+
+def fft2_new(data):
     """
     Apply centered 2 dimensional Fast Fourier Transform.
 
@@ -77,14 +89,18 @@ def fft2(data):
     Returns:
         torch.Tensor: The FFT of the input.
     """
-    assert data.size(-1) == 2
-    data = ifftshift(data, dim=(-3, -2))
-    data = torch_fft(data, 2, normalized=True)
-    data = fftshift(data, dim=(-3, -2))
+    if not data.shape[-1] == 2:
+        raise ValueError("Tensors do not have seperate complex dimensions")
+    data = ifftshift(data, dim = [-3, -2])
+    data = fft(data)
+    data = fftshift(data, dim = [-3, -2])
+
     return data
 
+    
+    
 
-def ifft2(data):
+def ifft2_new(data):
     """
     Apply centered 2-dimensional Inverse Fast Fourier Transform.
 
@@ -96,10 +112,12 @@ def ifft2(data):
     Returns:
         torch.Tensor: The IFFT of the input.
     """
-    assert data.size(-1) == 2
-    data = ifftshift(data, dim=(-3, -2))
-    data = torch_ifft(data, 2, normalized=True)
-    data = fftshift(data, dim=(-3, -2))
+    if not data.shape[-1] == 2:
+        raise ValueError('Tensors do not have a complex dimension')
+    data = ifftshift(data, dim = [-3, -2])
+    data = ifft(data)
+    data = fftshift(data, dim = [-3, -2])
+
     return data
 
 

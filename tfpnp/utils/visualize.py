@@ -30,5 +30,5 @@ def save_img(img, path):
         img = img[...,0]
     img = np.clip(img, 0, 255).astype(np.uint8)
     img = img.transpose(1,2,0)
-    import imageio
-    imageio.imwrite(path, img)
+    import cv2
+    cv2.imwrite(path, img)

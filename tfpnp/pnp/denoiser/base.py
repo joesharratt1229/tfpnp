@@ -5,6 +5,7 @@ from .models.unet import UNet
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 class UNetDenoiser2D(torch.nn.Module):
+    #### UNDERSTAND HOW ALL THIS WORKS
     def __init__(self, ckpt_path=None):
         super().__init__()
         if ckpt_path is None:
@@ -13,7 +14,7 @@ class UNetDenoiser2D(torch.nn.Module):
                 raise ValueError('Default ckpt not found, you have to provide a ckpt path')
             
         net = UNet(2, 1)
-        net.load_state_dict(torch.load(ckpt_path))
+        net.load_state_dict(torch.load(ckpt_path, map_location=torch.device('cpu')))
         net.eval()
         for param in net.parameters():
             param.requires_grad = False

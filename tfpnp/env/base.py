@@ -6,6 +6,8 @@ from ..utils.misc import torch2img255, apply_recursive
 from ..pnp import PnPSolver
 from ..data.batch import Batch
 
+#parent class -> implemented in environment.
+
 
 class Env:
     def reset(self):
@@ -18,9 +20,7 @@ class Env:
         raise NotImplementedError
 
     def step(self, action):
-        """Run one timestep of the environment's dynamics. When end of
-        episode is reached, you are responsible for calling `reset()`
-        to reset this environment's state.
+        """Runs one timestep of environment dynamics, when an episodes end is reached it is responsibility of me to call reset
 
         Accepts an action and returns a tuple (observation, reward, done, info).
 
@@ -112,19 +112,16 @@ class PnPEnv(DifferentiableEnv):
         """
         raise NotImplementedError
 
-    #################################################################################
-    #   Basic APIs
-    #
-    #   Do not modify the following methods unless you understand what you are doing.
-    #################################################################################
 
     def reset(self, data=None):
-        self.cur_step = 0  # # of step in an episode
+        #resets the environment to an initial state and returns an initial observation
+        self.cur_step = 0  # step of episode
 
         # load a new batch of data
         if data is None:
             try:
-                data = self.data_iterator.next()
+                #iterate to next batch of data
+                data = next(self.data_iterator)
             except StopIteration:
                 self.data_iterator = iter(self.data_loader)
                 data = self.data_iterator.next()
@@ -137,13 +134,12 @@ class PnPEnv(DifferentiableEnv):
             if isinstance(x, torch.Tensor): return x.to(self.device)
         data = apply_recursive(to_device, data)
 
-        # get inital solver states
+        # get inital solver states x, z, u
         solver_state = self.solver.reset(data)
         data.update({'solver': solver_state})
 
         # construct state of time step
         B, _, W, H = data['gt'].shape
-        # sigma_n = torch.ones_like(data['gt']) * data['sigma_n'].view(B, 1, 1, 1)
         T = torch.ones([B, 1, W, H], dtype=torch.float32,
                        device=self.device) * self.cur_step / self.max_episode_step
         data.update({'T': T})
@@ -152,32 +148,41 @@ class PnPEnv(DifferentiableEnv):
         self.idx_left = torch.arange(0, B).to(self.device)
         self.last_metric = self._compute_metric()
 
+
         return self._observation()
 
-    def step(self, action):
+    def step(self, action, gt):
         self.cur_step += 1
 
         # perform one step using solver and update state
         with torch.no_grad():
+            #arrange 0 to B 
             def f(x): return x[self.idx_left, ...]
             inputs = (f(self.state['solver']),
-                      #   f(self.solver.filter_aux_inputs(self.state))
                       apply_recursive(f, self.solver.filter_aux_inputs(self.state))
                       )
+            #get sigma_d and mu _> runs solver based on this
             parameters = self.solver.filter_hyperparameter(action)
-            solver_state = self.solver(inputs, parameters)
 
+            #pass x_k, z_k, u_k and observed k-space data and SR? and perform one iteration of plug and play output
+            solver_state, rewards, states = self.solver(inputs, parameters, gt)
+
+        #get terminiation parameter
         self.state['T'] = torch.ones_like(self.state['T']) * self.cur_step / self.max_episode_step
+        #get output reconstruction x
         self.state['output'][self.idx_left, ...] = self.solver.get_output(solver_state)
+        #get x_k, u_k, z_k
         self.state['solver'][self.idx_left, ...] = solver_state
 
-        # compute reward
-        reward = self._compute_reward()
+        # compute PSNR -> torch psnr method -> computes the PSNR
 
+
+        #builds next obs -> obersation method puts solver, output, T all in new states
         ob = self._observation()
 
         # update idx of items that should be processed in the next iteration
         idx_stop = action['idx_stop']
+        #finds out whether any of states in batch are completed or not
         self.idx_left = self.idx_left[idx_stop == 0]
         all_done = len(self.idx_left) == 0
         done = idx_stop.detach()
@@ -186,21 +191,24 @@ class PnPEnv(DifferentiableEnv):
             all_done = True
             done = torch.ones_like(idx_stop)
 
+        #find if any terminated
         ob_masked = self._observation()
 
-        return ob, ob_masked, reward, all_done, {'done': done}
+        return ob, ob_masked, rewards, all_done, {'done': done}, states
 
     def forward(self, ob, action):
         output = self._get_attribute(ob, 'output')
         gt = self._get_attribute(ob, 'gt')
         inputs = self._get_attribute(ob, 'solver_input')
 
+        #get parameters based on action
         parameters = self.solver.filter_hyperparameter(action)
+        #perform interation
         solver_state = self.solver(inputs, parameters)
+        #get output -> output imag
         output2 = self.solver.get_output(solver_state)
 
-        # compute reward
-        # print(gt.shape, output.shape, output2.shape)
+        # compute reward as specified as increase in psnr from updated state from initial state
         reward = self.metric_fn(output2, gt) - self.metric_fn(output, gt)
 
         return self._build_next_ob(ob, solver_state), reward

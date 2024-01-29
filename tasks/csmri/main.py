@@ -22,29 +22,40 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 sampling_masks = ['radial_128_2', 'radial_128_4', 'radial_128_8']
 
 
-def build_evaluator(data_dir, solver, sigma_n, save_dir):
-    val_loaders = {}
-    for sampling_mask in sampling_masks:
-        root = data_dir / 'csmri' / 'Medical7_2020' / sampling_mask / str(sigma_n)
-        dataset = CSMRIEvalDataset(root)
-        loader = DataLoader(dataset, batch_size=1, shuffle=False)
-        val_loaders[f'{sampling_mask}_{sigma_n}'] = loader
+def build_evaluator(data_dir, solver):
 
-    eval_env = CSMRIEnv(None, solver, max_episode_step=opt.max_episode_step).to(device)
-    evaluator = Evaluator(eval_env, val_loaders, save_dir)
+    sigma_ns = [5, 10, 15]
+    #defines a gaussian nose model and is intended to add noise to observations that it recieves
+    noise_model = GaussianModelD(sigma_ns)
+    mask_dir = data_dir / 'csmri' / 'masks'
+
+    #data directory for training dataset
+    train_root = data_dir / 'Images_128'
+    masks = [loadmat(mask_dir / f'{sampling_mask}.mat').get('mask') for sampling_mask in sampling_masks]   
+
+    
+    dataset = CSMRIEvalDataset(train_root, masks, noise_model)
+    loader = DataLoader(dataset, batch_size=1, shuffle=False)
+
+    eval_env = CSMRIEnv(loader, solver, max_episode_step=opt.max_episode_step).to(device)
+    evaluator = Evaluator(eval_env, loader)
     return evaluator
 
 
 def train(opt, data_dir, mask_dir, policy, solver, log_dir):
+    #noise level
     sigma_ns = [5, 10, 15]
+    #defines a gaussian nose model and is intended to add noise to observations that it recieves
     noise_model = GaussianModelD(sigma_ns)
 
+    #data directory for training dataset
     train_root = data_dir / 'Images_128'
     masks = [loadmat(mask_dir / f'{sampling_mask}.mat').get('mask') for sampling_mask in sampling_masks]
+    #initialises training dataset -> here series of transformations including fast fourier and noise degradation applied
     train_dataset = CSMRIDataset(train_root, fns=None, masks=masks, noise_model=noise_model)
-    train_loader = DataLoader(train_dataset, opt.env_batch,
-                              shuffle=True, num_workers=opt.num_workers,
-                              pin_memory=True, drop_last=True)
+    #data loader observation as specified by pytorch
+    train_loader = DataLoader(train_dataset, 8, shuffle=True)
+    
 
     eval = build_evaluator(data_dir, solver, '15', log_dir / 'eval_results')
     
@@ -72,26 +83,27 @@ def main(opt):
     log_dir = Path(opt.output)
     mask_dir = data_dir / 'csmri' / 'masks'
 
+    #initialises environment and creates policy network, denoiser, csmri, solver and also initialises distributed training if available
     base_dim = CSMRIEnv.ob_base_dim
     policy = create_policy_network(opt, base_dim).to(device)  # policy network
     denoiser = create_denoiser(opt).to(device)
     solver = create_solver_csmri(opt, denoiser).to(device)
     if torch.cuda.device_count() > 1:
         solver = DataParallelWithCallback(solver)
-        
+
     if opt.eval:
         ckpt = torch.load(opt.resume)
         policy.load_state_dict(ckpt)
-        for sigma_n in [5, 10, 15]:
-            save_dir = log_dir / 'test_results' / str(sigma_n)
-            e = build_evaluator(data_dir, solver, sigma_n, save_dir)
-            e.eval(policy, step=opt.resume_step)
-            print('--------------------------')
-        return 
     
+        e = build_evaluator(data_dir, solver)
+        e.eval(policy, step=opt.resume_step)
+        print('--------------------------')
+        return 
+    #maximum step is 6
     train(opt, data_dir, mask_dir, policy, solver, log_dir)
 
 if __name__ == "__main__":
     option = Options()
+    #parse the arguments given in main.Py
     opt = option.parse()
     main(opt)

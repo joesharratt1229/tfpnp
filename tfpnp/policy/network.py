@@ -11,13 +11,18 @@ from .sync_batchnorm import SynchronizedBatchNorm2d
 
 # norm = nn.BatchNorm2d
 # norm = nn.InstanceNorm2d
+
+# synchronised batch norm is a class used when training a across model 
+# multiple GPUs so that weight updates across a batch are synchronised across different gpus.
 norm = SynchronizedBatchNorm2d
 
 def conv3x3(in_planes, out_planes, stride=1):
+    #creates a conv layer
     return (nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False))
 
 def cfg(depth):
     depth_lst = [18, 34, 50, 101, 152]
+    #defines a config dictionary for the network
     assert (depth in depth_lst), "Error : Resnet depth should be either 18, 34, 50, 101, 152"
     cf_dict = {
         '18': (BasicBlock, [2,2,2,2]),
@@ -34,6 +39,12 @@ class BasicBlock(nn.Module):
     expansion = 1
 
     def __init__(self, in_planes, planes, stride=1):
+        """
+        Synchronised batc
+        """
+        
+
+        ## defines config.
         super(BasicBlock, self).__init__()
         self.conv1 = conv3x3(in_planes, planes, stride)
         self.bn1 = norm(planes)
@@ -85,6 +96,10 @@ class Bottleneck(nn.Module):
 
 
 class ResNetEncoder(nn.Module):
+    """res net encoder consists oof base blocks and bottle necks -> works as a feature extractor and the base of the network
+    is the same across the deterministic and stochastic policy.
+    """
+    
     def __init__(self, num_inputs, depth):
         super(ResNetEncoder, self).__init__()
         block, num_blocks = cfg(depth)
@@ -98,6 +113,7 @@ class ResNetEncoder(nn.Module):
         self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2) # 4x4       
 
     def _make_layer(self, block, planes, num_blocks, stride):
+        #converts layers defined in initialisation into sequential layers
         strides = [stride] + [1]*(num_blocks-1)
         layers = []
 
@@ -125,11 +141,14 @@ class ResNetActorBase(PolicyNetwork):
         
         self.actor_encoder = ResNetEncoder(num_inputs, 18)
 
+        # stochastic output for terminiation time
         self.fc_softmax = nn.Sequential(*[
             nn.Linear(512, 2),
             nn.Softmax(dim=1)
         ])
 
+        # deterministic output for penalty and noise level -> num of actions will be equal to 2.
+        #nn.linear 512 input nits 
         self.fc_deterministic = nn.Sequential(*[
             nn.Linear(512, action_bundle*num_actions),
             nn.Sigmoid()
@@ -141,25 +160,28 @@ class ResNetActorBase(PolicyNetwork):
         x = F.adaptive_avg_pool2d(x, 1)
         x = x.view(x.size(0), -1)
 
+        #compute the actions from the state
+
         action_probs = self.fc_softmax(x)        
         action_deterministic = self.fc_deterministic(x)
         
-        # discrete action
+        # get a caategoricla distribution from softmax probability 
         dist_categorical = Categorical(action_probs)
         dist_entropy = dist_categorical.entropy().unsqueeze(1)
 
         if idx_stop is None:
             if train:
-                # idx_stop = torch.argmax(action_probs, dim=1)
+                # sample from categorical distribution and terminate if 1 else continue training.
                 idx_stop = dist_categorical.sample()
             else:
                 idx_stop = torch.argmax(action_probs, dim=1)
-        
-        action_categorical_logprob = dist_categorical.log_prob(idx_stop).unsqueeze(1)
+
+        #log probability used in advantage function
+        #returns dictionary of actions for penalty and noise parameter
         action = self.action_mapping(action_deterministic)
         action['idx_stop'] = idx_stop
 
-        return action, action_categorical_logprob, dist_entropy, hidden
+        return action, [action_probs[0][1].item()] * 5, hidden
 
     def action_mapping(self, action_deterministic):
         num_actions = self.num_actions
@@ -168,6 +190,7 @@ class ResNetActorBase(PolicyNetwork):
         chunk_size = int(action_deterministic.shape[1] // num_actions)
         action_values = torch.split(action_deterministic, chunk_size, dim=1)
         action = OrderedDict()
+        #scales and shifts each action value where appropriate
         for i, key in enumerate(action_range):
             action[key] = action_values[i] * action_range[key]['scale'] \
                 + action_range[key]['shift']

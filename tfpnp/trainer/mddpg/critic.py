@@ -4,6 +4,9 @@ import torch.nn.functional as F
 import torch.nn.utils.weight_norm as weightNorm
 
 
+###Following defines value (critic) netowkr
+
+
 def conv3x3(in_planes, out_planes, stride=1):
     return weightNorm(nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=True))
 
@@ -54,6 +57,7 @@ class BasicBlock(nn.Module):
     def forward(self, x):
         out = self.relu_1(self.conv1(x))
         out = self.conv2(out)
+        #includes a skip connection which occurs following weight normamlsation
         out += self.shortcut(x)
         out = self.relu_2(out)
 
@@ -127,5 +131,6 @@ class ResNet_wobn(nn.Module):
         # x = F.avg_pool2d(x, 4)
         x = F.adaptive_avg_pool2d(x, 1)
         x = x.view(x.size(0), -1)
+        #output is the expected cumulative reward from following this policy.
         x = self.fc(x)
         return x

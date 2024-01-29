@@ -15,7 +15,10 @@ _policy_map = {
 
 def create_policy_network(opt, num_aux_inputs, action_range=None):
     if opt.solver in _policy_map:
+        #gets policy based on argument parsed in user input
         Policy = _policy_map[opt.solver]
+        #encodes additional inputs and action pack
+        #num of auxillary inputs is set to 6
         actor = Policy(num_aux_inputs, opt.action_pack, action_range)
     else:
         raise NotImplementedError

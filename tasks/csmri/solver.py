@@ -1,8 +1,12 @@
 import torch
 import numpy as np
+import torch.nn.functional as F
 
 from tfpnp.pnp.solver.base import ADMMSolver, HQSSolver, PGSolver, APGSolver, REDADMMSolver, AMPSolver
 from tfpnp.utils import transforms
+
+from tfpnp.utils.misc import torch2img255
+from tfpnp.utils.metric import psnr_qrnn3d
 
 
 # decorator
@@ -26,14 +30,15 @@ class ADMMSolver_CSMRI(CSMRIMixin, ADMMSolver):
     def __init__(self, denoiser):
         super().__init__(denoiser)
 
-    def forward(self, inputs, parameters, iter_num=None):    
+    def forward(self, inputs, parameters, gt, iter_num=None):    
         # y0:    [B,1,W,H,2]
         # mask:  [B,1,W,H]
         # x,z,u: [B,1,W,H,2]
+        rewards = []
+        states = []
 
         variables, (y0, mask) = inputs
         sigma_d, mu = parameters
-
         x, z, u = torch.split(variables, variables.shape[1] // 3, dim=1)
 
         # infer iter_num from provided hyperparameters
@@ -42,19 +47,33 @@ class ADMMSolver_CSMRI(CSMRIMixin, ADMMSolver):
         
         for i in range(iter_num):
             # x step
-            x = transforms.real2complex(self.prox_mapping(transforms.complex2real(z - u), sigma_d[:, i]))  # plug-and-play proximal mapping
+            x = transforms.real2complex(self.prox_mapping(transforms.complex2real(z - u), sigma_d[:, i]))
+            
 
             # z step
-            z = transforms.fft2(x + u)
+            z = transforms.fft2_new(x + u)
             _mu = mu[:, i].view(x.shape[0], 1, 1, 1, 1)
             temp = ((_mu * z.clone()) + y0) / (1 + _mu)
             z[mask, :] =  temp[mask, :]
-            z = transforms.ifft2(z)
+            z = transforms.ifft2_new(z)
 
             # u step
             u = u + x - z
-        
-        return torch.cat((x, z, u), dim=1)
+
+            N = x.shape[0]
+            output = x[..., 0]
+
+            output = torch2img255(output)
+            output = output.astype(np.int32)
+            reward = psnr_qrnn3d(output, gt)
+            rewards.append(reward)
+            temp_var = torch.cat((x, z, u), dim = 1)
+            temp_var = temp_var[..., 0].squeeze(dim = 0)
+            temp_var = torch2img255(temp_var)
+            states.append(temp_var)
+
+
+        return torch.cat((x, z, u), dim=1), rewards, states
 
 
 class HQSSolver_CSMRI(CSMRIMixin, HQSSolver):
