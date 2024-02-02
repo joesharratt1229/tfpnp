@@ -186,13 +186,15 @@ class ResNetActorBase(PolicyNetwork):
     def action_mapping(self, action_deterministic):
         num_actions = self.num_actions
         action_range = self.action_range
-        
         chunk_size = int(action_deterministic.shape[1] // num_actions)
         action_values = torch.split(action_deterministic, chunk_size, dim=1)
         action = OrderedDict()
+        noise_std = 0.05
         #scales and shifts each action value where appropriate
         for i, key in enumerate(action_range):
-            action[key] = action_values[i] * action_range[key]['scale'] \
+            noise = torch.randn(action_values[i].size()) * noise_std
+            noisy_action = action_values[i] + noise
+            action[key] = noisy_action * action_range[key]['scale'] \
                 + action_range[key]['shift']
 
         return action
