@@ -44,7 +44,7 @@ class Evaluator(object):
             
             for traj, state in enumerate(states):
                 x, z, u = np.split(state, 3)
-                for arr, label in zip([x, z, u], ['x', 'z', 'u']):
+                for arr, label in zip([x], ['x']):
                     arr = arr.astype(np.int32).reshape(128, 128)
                     image_path = f'{self.image_dir}/csrmi_{label}_image_{index}_trajectory_{traj}.png'
                     

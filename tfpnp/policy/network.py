@@ -186,15 +186,13 @@ class ResNetActorBase(PolicyNetwork):
     def action_mapping(self, action_deterministic):
         num_actions = self.num_actions
         action_range = self.action_range
+        
         chunk_size = int(action_deterministic.shape[1] // num_actions)
         action_values = torch.split(action_deterministic, chunk_size, dim=1)
         action = OrderedDict()
-        noise_std = 0.05
         #scales and shifts each action value where appropriate
         for i, key in enumerate(action_range):
-            noise = torch.randn(action_values[i].size()) * noise_std
-            noisy_action = action_values[i] + noise
-            action[key] = noisy_action * action_range[key]['scale'] \
+            action[key] = action_values[i] * action_range[key]['scale'] \
                 + action_range[key]['shift']
 
         return action
@@ -202,103 +200,3 @@ class ResNetActorBase(PolicyNetwork):
     #TODO add RNN support
     def init_state(self, B):
         return torch.zeros(B)
-    
-
-class ResNetActor_ADMM(ResNetActorBase):
-    def __init__(self, num_aux_inputs, action_bundle, action_range: Optional[OrderedDict] = None):
-        super().__init__(num_aux_inputs+3, action_bundle, 2)
-        if action_range is None:
-            action_range = OrderedDict({
-                'sigma_d': {'scale': 70 / 255, 'shift': 0},
-                'mu': {'scale': 1, 'shift': 0}                
-            })
-        self.action_range = action_range
-
-
-class ResNetActor_HQS(ResNetActorBase):
-    def __init__(self, num_aux_inputs, action_bundle, action_range: Optional[OrderedDict] = None):
-        super().__init__(num_aux_inputs+2, action_bundle, 2)
-        if action_range is None:
-            action_range = OrderedDict({
-                'sigma_d': {'scale': 70 / 255, 'shift': 0},
-                'mu': {'scale': 1, 'shift': 0}
-            })
-        self.action_range = action_range
-
-
-class ResNetActor_PG(ResNetActorBase):
-    def __init__(self, num_aux_inputs, action_bundle, action_range: Optional[OrderedDict] = None):
-        super().__init__(num_aux_inputs+1, action_bundle, 2)
-        if action_range is None:
-            action_range = OrderedDict({
-                'sigma_d': {'scale': 70 / 255, 'shift': 0},
-                'tau': {'scale': 2, 'shift': 0}
-            })
-        self.action_range = action_range
-
-
-class ResNetActor_APG(ResNetActorBase):
-    def __init__(self, num_aux_inputs, action_bundle, action_range: Optional[OrderedDict] = None):
-        super().__init__(num_aux_inputs+2, action_bundle, 3)
-        if action_range is None:
-            action_range = OrderedDict({
-                'sigma_d': {'scale': 70 / 255, 'shift': 0},
-                'tau': {'scale': 2, 'shift': 0},
-                'beta': {'scale': 2, 'shift': 0},
-            })            
-        self.action_range = action_range
-
-
-class ResNetActor_RED(ResNetActorBase):
-    # RED-ADMM
-    def __init__(self, num_aux_inputs, action_bundle, action_range: Optional[OrderedDict] = None):
-        super().__init__(num_aux_inputs+3, action_bundle, 3)
-        if action_range is None:
-            action_range = OrderedDict({
-                'sigma_d': {'scale': 70 / 255, 'shift': 0},
-                'mu': {'scale': 1, 'shift': 0},
-                'lamda': {'scale': 2, 'shift': 0},
-            })            
-        self.action_range = action_range
-
-
-class ResNetActor_IADMM(ResNetActorBase):
-    # Inexact PnP-ADMM
-    def __init__(self, num_aux_inputs, action_bundle, action_range: Optional[OrderedDict] = None):
-        super().__init__(num_aux_inputs+3, action_bundle, 3)
-        if action_range is None:
-            action_range = OrderedDict({
-                'sigma_d': {'scale': 70 / 255, 'shift': 0},
-                'mu': {'scale': 1, 'shift': 0},
-                'tau': {'scale': 2, 'shift': 0},
-            })
-        self.action_range = action_range
-
-
-class ResNetActor_AMP(ResNetActorBase):
-    def __init__(self, num_aux_inputs, action_bundle, action_range: Optional[OrderedDict] = None):
-        super().__init__(num_aux_inputs+2, action_bundle, 1)
-        if action_range is None:
-            action_range = OrderedDict({
-                'sigma_d': {'scale': 2, 'shift': 0}, 
-            })
-        self.action_range = action_range
-
-
-class ResNetActor_SPI(ResNetActorBase):
-    # for single photon imaging
-    def __init__(self, num_aux_inputs, action_bundle, action_range: Optional[OrderedDict] = None):
-        super().__init__(num_aux_inputs+3, action_bundle, 2)
-        self.fc_deterministic = nn.Sequential(*[
-            nn.Linear(512, 64),
-            nn.ReLU(),
-            nn.Linear(64, action_bundle*2),
-            nn.Sigmoid()
-        ])
-
-        if action_range is None:
-            action_range = OrderedDict({
-                'sigma_d': {'scale': 55 / 255, 'shift': 15 / 255}, 
-                'mu': {'scale': 70, 'shift': 50}
-            })
-        self.action_range = action_range

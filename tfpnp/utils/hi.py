@@ -25,7 +25,7 @@ if __name__ == '__main__':
     img = np.array(img, dtype = np.float32)/255
     img_1 = torch.from_numpy(np.array(img_1, dtype = np.float32)/225)
     img = torch.from_numpy(img)
-
+    print(img.shape)
     img_new = torch.fft.ifftshift(img, dim = (-2, -1))
     img_new = torch.fft.fftn(img_new, dim = (-2, -1), norm = 'ortho')
     img_new = torch.fft.fftshift(img_new, dim = (-2, -1))
